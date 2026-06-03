@@ -1,98 +1,127 @@
 # CS2 Toolkit
 
-Launcher + overlay for launching the HS Tracker and Status Overlay from `scripts/overlay.py`
+A command-line tool for Counter-Strike 2 that reads game memory, shows a transparent
+status overlay, and runs an automatic **disconnect ↔ reconnect** loop for deranking.
 
-## Project Status
+## How it works
 
-This iteration has been restructured to be closer to a production-ready product, but it should still be considered a beta/internal build before commercial release.
+1. Reads CS2 process memory to detect the current state — `LOBBY`, `WARMUP`, or `IN GAME`
+2. When you reach `IN GAME`, it presses the **disconnect key (Z)**
+3. A background scanner watches the screen for `pic/reconnect.png`; when the reconnect
+   prompt appears, it clicks it — putting you back in the match
+4. Back in game → disconnect again → reconnect again → **loops until the match ends**
 
-The program reads game memory and sends keyboard/mouse input, which carries potential risks related to platform policies and customer support.
+The current state is shown as a transparent label on top of the game. The launcher runs
+in a console window: status changes, disconnects, and clicks are printed there, and
+**Ctrl+C** stops everything.
 
 ---
 
-## Installation
+## Setup (one-time)
 
-1. Install Python 3.10 or later
-2. Install dependencies:
+### 1. Install Python 3.10+
+
+### 2. Install dependencies
 
 ```powershell
-python -m pip install -r requirements.txt
+py -3 -m pip install pywin32 opencv-python Pillow Pymem
 ```
 
-3. Run with Administrator privileges:
+### 3. Bind Z to disconnect in CS2  ⚠️ required
+
+The tool sends the **Z** key to disconnect, so Z must be bound to the `disconnect` command:
+
+1. Enable the console: **Settings → Game → Enable Developer Console → Yes**
+2. Press `` ~ `` to open the console and run:
+
+   ```
+   bind z disconnect
+   ```
+
+### 4. Check the reconnect button image
+
+`pic/reconnect.png` must match the **RECONNECT** button as it looks on *your* screen.
+If your resolution or UI differs, crop a fresh screenshot of the button and replace it.
+
+> Only `pic/reconnect.png` is active. Optional buttons (`accept`, `go`, `ok`) are parked
+> in `pic_disabled/`. Move them into `pic/` if you also want the tool to auto-queue and
+> auto-accept new matches (full cross-match automation).
+
+---
+
+## Running
+
+Double-click **`Run Latest CS2 Toolkit.bat`** — it elevates to Administrator (required to
+read game memory) and opens a console. You can also run `python launcher.py` from an
+already-elevated terminal.
+
+Then just play: queue and accept a match yourself, and once you're in, the loop takes over.
+
+```
+CS2 Toolkit v1.4
+Overlay starting. Press Ctrl+C to stop.
+[+] Attached to CS2
+[*] Watching for buttons: reconnect.PNG
+[*] IN GAME
+[*] In game — sending disconnect
+[*] LOBBY
+[+] Clicked reconnect.PNG
+[*] IN GAME
+...
+```
+
+| Step | What happens |
+|---|---|
+| You enter a match | overlay shows `WARMUP` → `IN GAME` |
+| `IN GAME` | the tool presses **Z** (disconnect) |
+| Reconnect prompt appears | the tool clicks **RECONNECT** → back in game |
+| Repeats | disconnect ↔ reconnect until the match ends |
+| Match ends → menu | no reconnect button → the loop stops on its own |
+| To quit | press **Ctrl+C** in the console |
+
+> CS2 must be the focused (foreground) window — the tool won't send input while you're
+> alt-tabbed to another app.
+
+---
+
+## Updating offsets after a CS2 update
+
+If the status reads wrong after CS2 patches, the memory offsets may be stale.
+Update `DEFAULT_OFFSETS` in `cs2_overlay/config.py` with the new values (or override
+them in `data/offsets.json`).
+
+---
+
+## Local checks
+
+These do not require CS2 to be running:
 
 ```powershell
-.\launcher.bat
+python -m unittest discover -s tests
+python -m compileall -q launcher.py scripts tests
 ```
 
 ---
 
-## Build as EXE
+## File reference
 
-Run this command from the project folder:
-
-```powershell
-.\build_exe.bat
-```
-
-The output will be located at:
-
-```text
-dist\CS2Toolkit\launcher.exe
-```
-
-You must keep the following items in the same folder:
-
-- `launcher.exe`
-- `overlay.exe`
-- `_internal`
-- `data`
-- `tools`
-
-If running from the `dist\CS2Toolkit` folder, launch:
-
-```text
-Run CS2 Toolkit.bat
-```
-
-This file will elevate privileges to Administrator and then launch `launcher.exe`.
+| File | Description |
+|---|---|
+| `install.bat` | First-time setup — installs Python dependencies |
+| `Run Latest CS2 Toolkit.bat` | Recommended launcher (auto-elevates, opens console) |
+| `launcher.py` | CLI supervisor — runs and restarts the overlay |
+| `scripts/overlay.py` | Status overlay + disconnect/clicker threads |
+| `pic/reconnect.png` | Reconnect button image the clicker looks for |
+| `pic_disabled/` | Parked button images (accept / go / ok) — not scanned |
+| `data/offsets.json` | Fallback offsets (auto-created from defaults if missing) |
 
 ---
 
-## Config
+## Notes & troubleshooting
 
-When `launcher.py` is started for the first time, the program will create `data/config.json` using default values.
-
-If Steam/CS2 is not installed in the default path, specify the path manually:
-
-```json
-{
-  "auto_dump": true,
-  "cs2_exe": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Counter-Strike Global Offensive\\game\\bin\\win64\\cs2.exe",
-  "dump_check_interval_seconds": 3600,
-  "dump_timeout_seconds": 120
-}
-```
-
----
-
-## Important Files
-
-| File                            | Description                                                    |
-| ------------------------------- | -------------------------------------------------------------- |
-| `launcher.py`                   | Main UI, process manager, and auto dump watcher                |
-| `launcher.bat`                  | Launches the launcher in portable mode from the current folder |
-| `scripts/overlay.py`            | The actual runtime overlay                                     |
-| `scripts/archive/`              | Old prototypes kept for reference                              |
-| `data/offsets.json`             | Offsets currently used by the overlay                          |
-| `data/logs/launcher.log`        | Launcher logs                                                  |
-| `data/logs/overlay.log`         | Overlay stdout/stderr logs                                     |
-| `data/logs/overlay-runtime.log` | Logs written directly by the overlay during runtime            |
-
----
-
-## Notes
-
-- Administrator privileges are required for memory access and input handling.
-- Windows Defender or antivirus software may flag the executable due to memory reading/input behavior.
-- This project is intended for internal/testing purposes until stability and support workflows are finalized.
+- **Windows only**, and must run as **Administrator** (memory access + synthetic input).
+- **Nothing happens at the menu** — the loop only acts once you're actually in a match.
+- **Z does nothing?** Make sure `bind z disconnect` is set in CS2.
+- **Clicks miss the button?** The clicker auto-corrects for Windows display scaling; if it
+  still misses, re-crop `pic/reconnect.png` from a current screenshot.
+- No log files are written — everything prints to the console.

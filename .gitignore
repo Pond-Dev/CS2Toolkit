@@ -4,11 +4,14 @@ __pycache__/
 venv/
 env/
 
-data/logs/
 data/*.tmp
-data/cs2_last_version.json
-data/config.json
 data/offsets.json
+config.json
+output/
 
 dist/
 build/
+
+CLAUDE.md
+tests
+cs2-dumper.log

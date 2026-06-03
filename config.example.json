@@ -1,0 +1,40 @@
+{
+  "DERANK_AFK_MODE": false,
+  "AUTO_INVITE": true,
+  "HOST_MONITOR_INDEX": 0,
+
+  "ALT_FRIEND_CODES": [
+    "AAAAA-1111",
+    "BBBBB-2222",
+    "CCCCC-3333",
+    "DDDDD-4444"
+  ],
+
+  "LOBBY_PLAYER_IMAGES": [
+    "avatar_01.png",
+    "avatar_02.png",
+    "avatar_03.png",
+    "avatar_04.png",
+    "avatar_05.png"
+  ],
+  "LOBBY_FULL_COUNT": 5,
+
+  "INVITE_RESULT_ROW_POS": [0.40, 0.505],
+  "INVITE_RESULT_DX": -55,
+  "INVITE_RESULT_DY": 40,
+  "INVITE_CANCEL_IMAGE": "cancel.png",
+  "INVITE_CODE_FIELD_FALLBACK_POS": [0.49, 0.50],
+
+  "INVITE_ACCEPT_SECS": 45.0,
+  "GO_TIMEOUT": 30.0,
+  "SEARCH_TIMEOUT": 300.0,
+  "MATCH_FULL_COUNT": 10,
+  "MATCH_PLAYER_WAIT_TIMEOUT": 90.0,
+  "MATCH_PLAYER_WAIT_POLL": 1.0,
+
+  "STARTUP_DELAY_SECS": 5.0,
+  "DISCONNECT_KEY_VK": 90,
+  "MATCH_THRESHOLD": 0.8,
+  "MATCH_SCALES": [1.0, 0.85, 0.72, 0.6, 0.5, 0.42, 0.35, 0.3, 0.25, 0.2],
+  "DEBUG": false
+}

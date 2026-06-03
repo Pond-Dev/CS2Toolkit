@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m compileall -q launcher.py scripts tests)",
+      "Bash(python -m unittest discover -s tests)",
+      "Bash(python -c \"import cv2; import PIL; print\\('ok'\\)\")",
+      "Bash(python -m pip install -r requirements.txt)",
+      "Bash(python overlay.py)",
+      "Bash(python -c \"import sys; sys.path.insert\\(0, '.'\\); from cs2_overlay import state, config, paths, offsets, memory, loops, input as inp\")",
+      "Bash(python -c \"import sys; sys.path.insert\\(0,'.'\\); from cs2_overlay.loops import clicker_loop, status_loop; from cs2_overlay.input import load_templates, find_and_click; print\\('templates found:', [n for n,_ in load_templates\\(\\)]\\)\")",
+      "Bash(git rm *)",
+      "Bash(tasklist)",
+      "Bash(taskkill /F /IM python.exe /IM pythonw.exe)",
+      "Bash(rm -rf data/logs)",
+      "Bash(python -c \"import sys; sys.path.insert\\(0,'.'\\); from cs2_overlay import offsets; print\\('offsets loaded, OFF_CTRL=', hex\\(offsets.OFF_CTRL\\)\\)\")",
+      "Bash(python -m compileall -q scripts)",
+      "Bash(python -m compileall -q scripts tests)",
+      "Bash(python -c \"import PIL; print\\('Pillow', PIL.__version__\\)\")",
+      "Bash(python -c \"import ctypes; u=ctypes.windll.user32; u.SetProcessDPIAware\\(\\); import ctypes.wintypes as w; print\\('logical screen:', u.GetSystemMetrics\\(0\\), 'x', u.GetSystemMetrics\\(1\\)\\)\")",
+      "Bash(python -c \"import ctypes; u=ctypes.windll.user32; print\\(u.GetSystemMetrics\\(0\\), 'x', u.GetSystemMetrics\\(1\\)\\)\")",
+      "Bash(python -c \"from PIL import ImageGrab; import numpy as np; print\\(np.array\\(ImageGrab.grab\\(\\)\\).shape\\)\")"
+    ]
+  }
+}
