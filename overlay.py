@@ -4,8 +4,7 @@ import threading
 import time
 
 from cs2_overlay.config import DERANK_AFK_MODE, STARTUP_DELAY_SECS, VERSION
-from cs2_overlay.log_setup import disable_console_quick_edit, is_admin, log
-from cs2_overlay.paths import BASE
+from cs2_overlay.core import BASE, disable_console_quick_edit, is_admin, log
 from cs2_overlay.runtime import automation_for_mode, wait_for_automation_mode
 
 

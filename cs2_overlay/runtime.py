@@ -1,7 +1,16 @@
-"""Runtime wiring for normal controller mode vs derank AFK mode."""
-from .afk import afk_loop
-from .controller import controller_loop
-from .startup import wait_before_automation
+"""Launch wiring: startup delay + which automation loop to run for each mode."""
+import time
+
+from .core import log
+from .flows import afk_loop, controller_loop
+
+
+def wait_before_automation(delay, sleep=time.sleep, log_func=log):
+    """Pause before starting automation threads."""
+    if delay <= 0:
+        return
+    log_func(f"[*] Startup delay: waiting {delay:g}s before automation")
+    sleep(delay)
 
 
 def wait_for_automation_mode(derank_afk_mode, delay_secs, wait_func=wait_before_automation):

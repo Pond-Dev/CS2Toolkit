@@ -1,9 +1,17 @@
-"""Synthetic input — keyboard + mouse events sent into the CS2 window.
+"""Platform/IO layer: paths, logging, CS2 window discovery, screen matching, input.
 
-Every action checks ``cs2_is_foreground()`` first so we never fire input at the
-wrong app (e.g. while the user has alt-tabbed). The clicker scans every ``.png``
-in ``pic/`` against a single screenshot and clicks the first button it matches.
+This is the low-level half of the toolkit. The automation behaviors in
+``flows.py`` are built on top of these primitives:
+
+- paths/logging        — BASE/PIC_DIR, log/d_print, admin + console helpers
+- CS2 window discovery  — find HWNDs, client/monitor rects, focus, foreground
+- screen matching       — screenshot every monitor, template-match pic/*.png
+- synthetic input       — clicks, the disconnect key, typing/pasting friend codes
+
+Every input action checks the foreground window first so we never fire input at
+the wrong app.
 """
+import ctypes
 import os
 import time
 
@@ -12,19 +20,232 @@ import numpy as np
 import win32api
 import win32clipboard
 import win32con
+import win32gui
+import win32process
 from PIL import ImageGrab
 
-from .config import (
-    CLICK_SUPPRESSED_BY,
-    DISCONNECT_KEY_VK,
-    MATCH_SCALES,
-    MATCH_THRESHOLD,
-)
-from .cs2_window import cs2_is_foreground
-from .log_setup import d_print, log
-from .paths import PIC_DIR
+from . import config
+from .config import CLICK_SUPPRESSED_BY, DISCONNECT_KEY_VK, MATCH_SCALES, MATCH_THRESHOLD, WIN
+
+# ---- paths ----------------------------------------------------------------
+# This file is cs2_overlay/core.py; BASE is the CS2Toolkit root (its parent).
+BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PIC_DIR = os.path.join(BASE, "pic")
+
+# ---- shared mutable state -------------------------------------------------
+_cs2_hwnd_cache = {"hwnd": 0, "checked": 0.0}
 
 
+# ---- logging / process helpers --------------------------------------------
+STD_INPUT_HANDLE = -10
+ENABLE_INSERT_MODE = 0x0020
+ENABLE_QUICK_EDIT_MODE = 0x0040
+ENABLE_EXTENDED_FLAGS = 0x0080
+
+
+def log(msg, _level=None):
+    print(msg, flush=True)
+
+
+def d_print(msg):
+    if config.DEBUG:
+        print(f"[DEBUG] {msg}", flush=True)
+
+
+def is_admin():
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except Exception:
+        return False
+
+
+def disable_console_quick_edit(kernel32=None):
+    """Disable Windows console QuickEdit so selecting text cannot pause the bot."""
+    try:
+        kernel32 = kernel32 or ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(STD_INPUT_HANDLE)
+        if not handle:
+            return False
+        mode = ctypes.c_uint()
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return False
+        new_mode = (mode.value | ENABLE_EXTENDED_FLAGS) & ~ENABLE_QUICK_EDIT_MODE
+        return bool(kernel32.SetConsoleMode(handle, new_mode))
+    except Exception:
+        return False
+
+
+# ---- CS2 window discovery -------------------------------------------------
+def get_cs2_hwnd():
+    """Return CS2's HWND (or 0). Cached for 1s — FindWindow isn't expensive but
+    doing it on every poll burns a syscall."""
+    now = time.monotonic()
+    cache = _cs2_hwnd_cache
+    if now - cache["checked"] < 1.0 and cache["hwnd"]:
+        if win32gui.IsWindow(cache["hwnd"]):
+            return cache["hwnd"]
+    hwnd = win32gui.FindWindow(None, WIN)
+    cache["hwnd"] = hwnd
+    cache["checked"] = now
+    return hwnd
+
+
+def window_client_rect(hwnd):
+    """Client rect for a specific CS2 window as (left, top, right, bottom)."""
+    try:
+        rect = win32gui.GetClientRect(hwnd)
+        left, top = win32gui.ClientToScreen(hwnd, (0, 0))
+        return left, top, left + rect[2], top + rect[3]
+    except Exception:
+        return None
+
+
+def cs2_is_foreground():
+    try:
+        fg = win32gui.GetForegroundWindow()
+        if not fg:
+            return False
+        return win32gui.GetWindowText(fg) == WIN
+    except Exception:
+        return False
+
+
+def window_is_foreground(hwnd):
+    """True only when this exact HWND is the current foreground window."""
+    try:
+        return win32gui.GetForegroundWindow() == hwnd
+    except Exception:
+        return False
+
+
+def any_cs2_window():
+    """True if at least one CS2 window exists anywhere (any monitor / instance).
+
+    The multi-instance clicker gates on "a CS2 is open" rather than "CS2 is
+    focused" since only one of several windows can ever be foreground."""
+    found = []
+
+    def _cb(hwnd, _):
+        if win32gui.IsWindowVisible(hwnd) and win32gui.GetWindowText(hwnd) == WIN:
+            found.append(hwnd)
+        return True
+
+    try:
+        win32gui.EnumWindows(_cb, None)
+    except Exception:
+        return False
+    return bool(found)
+
+
+def window_monitor_rect(hwnd):
+    """(left, top, right, bottom) of the monitor the window mostly sits on,
+    in logical (cursor-space) coordinates."""
+    try:
+        hmon = win32api.MonitorFromWindow(hwnd, win32con.MONITOR_DEFAULTTONEAREST)
+        return tuple(win32api.GetMonitorInfo(hmon)["Monitor"])
+    except Exception:
+        return (0, 0, 0, 0)
+
+
+def _window_position_key(hwnd):
+    """Sort key for tiled CS2 windows: top-to-bottom, then left-to-right."""
+    rect = window_client_rect(hwnd) or window_monitor_rect(hwnd)
+    left, top, _right, _bottom = rect
+    return top, left
+
+
+def list_cs2_windows():
+    """Every visible CS2 top-level window, ordered by on-screen position.
+
+    Top row windows come first, left-to-right; lower rows follow. This makes
+    HOST_MONITOR_INDEX=0 target the upper-left CS2 window in tiled layouts."""
+    found = []
+
+    def _cb(hwnd, _):
+        if win32gui.IsWindowVisible(hwnd) and win32gui.GetWindowText(hwnd) == WIN:
+            found.append(hwnd)
+        return True
+
+    try:
+        win32gui.EnumWindows(_cb, None)
+    except Exception:
+        return []
+    return sorted(found, key=_window_position_key)
+
+
+def window_pid(hwnd):
+    """The process id owning a window (0 on failure)."""
+    try:
+        _tid, pid = win32process.GetWindowThreadProcessId(hwnd)
+        return pid
+    except Exception:
+        return 0
+
+
+def _tap_alt():
+    win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
+    win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
+
+
+def _attach_thread_input(hwnd):
+    """Temporarily attach this thread to the foreground/target UI threads."""
+    attached = []
+    try:
+        current_thread = win32api.GetCurrentThreadId()
+        foreground = win32gui.GetForegroundWindow()
+        thread_ids = []
+        if foreground:
+            thread_ids.append(win32process.GetWindowThreadProcessId(foreground)[0])
+        thread_ids.append(win32process.GetWindowThreadProcessId(hwnd)[0])
+        for tid in thread_ids:
+            if tid and tid != current_thread and tid not in attached:
+                win32process.AttachThreadInput(current_thread, tid, True)
+                attached.append(tid)
+    except Exception:
+        pass
+    return attached
+
+
+def _detach_thread_input(attached):
+    try:
+        current_thread = win32api.GetCurrentThreadId()
+        for tid in reversed(attached):
+            try:
+                win32process.AttachThreadInput(current_thread, tid, False)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def focus_window(hwnd):
+    """Bring a CS2 window to the foreground so keyboard input lands on it.
+
+    Windows refuses SetForegroundWindow from a background process while another
+    app holds the foreground lock; a synthetic ALT tap is the usual unlock."""
+    try:
+        if win32gui.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        for _ in range(5):
+            if window_is_foreground(hwnd):
+                return True
+            _tap_alt()
+            attached = _attach_thread_input(hwnd)
+            try:
+                try:
+                    win32gui.BringWindowToTop(hwnd)
+                except Exception:
+                    pass
+                win32gui.SetForegroundWindow(hwnd)
+            finally:
+                _detach_thread_input(attached)
+            time.sleep(0.08)
+        return window_is_foreground(hwnd)
+    except Exception:
+        return False
+
+
+# ---- synthetic input ------------------------------------------------------
 def send_disconnect():
     if not cs2_is_foreground():
         d_print("send_disconnect skipped — CS2 not foreground")
@@ -42,12 +263,21 @@ def _click(x, y):
     win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, x, y, 0, 0)
 
 
+def click_point(x, y):
+    """Single left click at cursor coords. Caller ensures the right window is
+    focused (the invite macro focuses the host first)."""
+    _click(x, y)
+
+
+# ---- template loading + matching ------------------------------------------
 def load_templates(only=None, exclude=None):
     """Load .png files in pic/ as (name, grayscale image) pairs.
 
-    ``only``/``exclude`` (collections of file names) let the parallel clicker and
-    the derank cycle each load just the buttons they own. Name matching is
-    case-insensitive so accept.PNG and accept.png are treated alike."""
+    ``only``/``exclude`` (collections of file names) let the clicker and the
+    derank cycle each load just the buttons they own. Name matching is
+    case-insensitive so accept.PNG and accept.png are treated alike. The stored
+    name is lowercased so config-based matching (CLICK_SUPPRESSED_BY,
+    DERANK_IMAGES) works regardless of how the file is cased on disk."""
     if not os.path.isdir(PIC_DIR):
         log(f"[WARN] pic folder not found: {PIC_DIR}")
         return []
@@ -66,28 +296,14 @@ def load_templates(only=None, exclude=None):
         if img is None:
             log(f"[WARN] Could not read image: {name}")
             continue
-        # Store the normalized (lowercase) name so config-based matching —
-        # CLICK_SUPPRESSED_BY, DERANK_IMAGES — works regardless of how the file
-        # is cased on disk (e.g. correct.PNG vs correct.png).
         templates.append((low, img))
     if not templates:
         log(f"[WARN] No usable .png images in {PIC_DIR}")
     return templates
 
 
-def _locate(template, screen_gray):
-    """Return the center (x, y) of the best match, or None if below threshold."""
-    result = cv2.matchTemplate(screen_gray, template, cv2.TM_CCOEFF_NORMED)
-    _, max_val, _, max_loc = cv2.minMaxLoc(result)
-    if max_val < MATCH_THRESHOLD:
-        return None
-    h, w = template.shape
-    return max_loc[0] + w // 2, max_loc[1] + h // 2
-
-
 # Per-image memory of the scale that last matched, so steady-state scanning only
 # runs one matchTemplate per template instead of the whole MATCH_SCALES sweep.
-# Keyed by template name (lowercase); see _locate_all.
 _scale_cache = {}
 
 
@@ -136,8 +352,7 @@ def _locate_all(template, screen_gray, name=None, threshold=MATCH_THRESHOLD, sca
     Multi-scale: the template is matched at each MATCH_SCALES size and the
     best-scoring scale wins, so buttons still match when CS2 runs windowed at a
     different size than the .png was cropped at. The winning scale is cached per
-    ``name`` and tried first next time, so a locked-in scale costs one match.
-    """
+    ``name`` and tried first next time, so a locked-in scale costs one match."""
     scales = tuple(scales)
     cached = _scale_cache.get(name) if name else None
     best = None
@@ -149,10 +364,7 @@ def _locate_all(template, screen_gray, name=None, threshold=MATCH_THRESHOLD, sca
         best = _best_scale_result(template, screen_gray, scales)
     if best is None or best[0] < threshold:
         if best is not None and name:
-            d_print(
-                f"no match {name}: best {best[0]:.3f} @ {best[1]:.2f}x "
-                f"(need {threshold})"
-            )
+            d_print(f"no match {name}: best {best[0]:.3f} @ {best[1]:.2f}x (need {threshold})")
         return []
     _, scale, tmpl, result = best
     if name:
@@ -176,13 +388,11 @@ def _scale_to_cursor(x, y, cap_w, cap_h, screen_w, screen_h, origin_x=0, origin_
 
     ImageGrab captures *physical* pixels, but the overlay process is DPI-unaware
     so the cursor uses *logical* pixels. They differ whenever Windows display
-    scaling isn't 100% (e.g. 125% → capture 2560 wide, cursor space 2048 wide),
-    so a raw match point would click the wrong spot without this rescale.
+    scaling isn't 100% (e.g. 125% -> capture 2560 wide, cursor space 2048 wide).
 
     ``origin_x/origin_y`` is the virtual desktop's top-left in cursor space; it's
     non-zero (and can be negative) once a multi-monitor capture spans monitors
-    that sit left of / above the primary one.
-    """
+    that sit left of / above the primary one."""
     if not cap_w or not cap_h:
         return x, y
     return (
@@ -200,11 +410,7 @@ def any_match_in(matches, rect):
     """True if a precomputed ``scan_matches`` dict has any point inside ``rect``."""
     if not matches:
         return False
-    return any(
-        _point_in_rect(x, y, rect)
-        for points in matches.values()
-        for x, y in points
-    )
+    return any(_point_in_rect(x, y, rect) for points in matches.values() for x, y in points)
 
 
 def scan_matches(templates, threshold=MATCH_THRESHOLD, scales=MATCH_SCALES):
@@ -228,13 +434,7 @@ def scan_matches(templates, threshold=MATCH_THRESHOLD, scales=MATCH_SCALES):
     matches = {}
     for name, template in templates:
         try:
-            points = _locate_all(
-                template,
-                screen_gray,
-                name,
-                threshold=threshold,
-                scales=scales,
-            )
+            points = _locate_all(template, screen_gray, name, threshold=threshold, scales=scales)
         except Exception as e:
             d_print(f"match {name} failed: {e}")
             continue
@@ -245,56 +445,6 @@ def scan_matches(templates, threshold=MATCH_THRESHOLD, scales=MATCH_SCALES):
         if mapped:
             matches[name] = mapped
     return matches
-
-
-def scan_best_matches(templates, scales=MATCH_SCALES):
-    """Best score/scale/position for each template in one screenshot.
-
-    Used for diagnostics: unlike ``scan_matches`` this reports the best attempt
-    even when it is below threshold, so command output can show why a template
-    did not fire.
-    """
-    try:
-        screen = np.array(ImageGrab.grab(all_screens=True))
-        screen_gray = cv2.cvtColor(screen, cv2.COLOR_RGB2GRAY)
-    except Exception as e:
-        d_print(f"screen grab failed: {e}")
-        return {}
-
-    cap_h, cap_w = screen_gray.shape[:2]
-    origin_x = win32api.GetSystemMetrics(win32con.SM_XVIRTUALSCREEN)
-    origin_y = win32api.GetSystemMetrics(win32con.SM_YVIRTUALSCREEN)
-    virt_w = win32api.GetSystemMetrics(win32con.SM_CXVIRTUALSCREEN)
-    virt_h = win32api.GetSystemMetrics(win32con.SM_CYVIRTUALSCREEN)
-
-    best_by_name = {}
-    for name, template in templates:
-        try:
-            best = _best_scale_result(template, screen_gray, scales)
-        except Exception as e:
-            d_print(f"best match {name} failed: {e}")
-            continue
-        if best is None:
-            continue
-        score, scale, tmpl, result = best
-        _, _, _, max_loc = cv2.minMaxLoc(result)
-        cx = max_loc[0] + tmpl.shape[1] // 2
-        cy = max_loc[1] + tmpl.shape[0] // 2
-        best_by_name[name] = {
-            "score": float(score),
-            "scale": scale,
-            "point": _scale_to_cursor(
-                cx,
-                cy,
-                cap_w,
-                cap_h,
-                virt_w,
-                virt_h,
-                origin_x,
-                origin_y,
-            ),
-        }
-    return best_by_name
 
 
 def _blocked_in_rect(name, matches, rect):
@@ -314,8 +464,7 @@ def find_and_click_in_rect(templates, rect, skip_click=()):
     at a time. ``CLICK_SUPPRESSED_BY`` still applies within the rect (e.g. don't
     click correct.png while reconnect.png shows on it) — so pass the blocker
     image in ``templates`` even if it's in ``skip_click``. Names in
-    ``skip_click`` are scanned (for suppression) but never clicked, letting the
-    clicker honor reconnect.png without stealing it from the derank cycle.
+    ``skip_click`` are scanned (for suppression) but never clicked.
     Returns the list of clicked template names."""
     skip = {n.lower() for n in skip_click}
     matches = scan_matches(templates)
@@ -342,38 +491,6 @@ def has_match_in_rect(templates, rect):
     return any_match_in(scan_matches(templates), rect)
 
 
-def count_distinct_in_rect(named_templates, rect):
-    """Count distinct positions matched by any of ``named_templates`` inside
-    ``rect``, de-duplicating hits that land on the same spot.
-
-    ``_locate_all`` already de-dupes within one template; this also de-dupes
-    *across* templates, so a lobby slot matched by more than one image (repeated
-    frame colors, overlapping avatars) is counted once. Used to count how many
-    player slots are filled."""
-    matches = scan_matches(named_templates)
-    if not matches:
-        return 0
-    sizes = {name.lower(): tmpl.shape[:2] for name, tmpl in named_templates}
-    points = []
-    for name, pts in matches.items():
-        h, w = sizes.get(name, (20, 20))
-        radius = max(w, h) // 2
-        for x, y in pts:
-            if _point_in_rect(x, y, rect):
-                points.append((x, y, radius))
-    kept = []
-    for x, y, radius in points:
-        if all(abs(x - kx) > radius or abs(y - ky) > radius for kx, ky in kept):
-            kept.append((x, y))
-    return len(kept)
-
-
-def click_point(x, y):
-    """Single left click at cursor coords. Caller ensures the right window is
-    focused (the invite macro focuses the host first)."""
-    _click(x, y)
-
-
 def locate_in_rect(name, template, rect):
     """Center (x, y) of the first match of one template inside ``rect``, or None.
     Used to anchor offset clicks (e.g. the search-result row below the code box)."""
@@ -386,6 +503,23 @@ def locate_in_rect(name, template, rect):
     return None
 
 
+def click_image_in_rect(name, template, rect, all_matches=True):
+    """Click one template's matches inside ``rect``; return how many were clicked.
+
+    Used by the invite macro to drive one button per step. ``all_matches`` clicks
+    every hit (e.g. an add button per online friend); otherwise just the first."""
+    matches = scan_matches([(name, template)])
+    if not matches:
+        return 0
+    points = [p for p in matches.get(name, []) if _point_in_rect(p[0], p[1], rect)]
+    if not all_matches:
+        points = points[:1]
+    for cx, cy in points:
+        _click(cx, cy)
+    return len(points)
+
+
+# ---- text entry (friend codes) --------------------------------------------
 _NO_CLIPBOARD_TEXT = object()
 
 
@@ -443,10 +577,9 @@ def _paste_via_clipboard(
 def paste_text(text):
     """Paste text into the focused CS2 text field.
 
-    This avoids VkKeyScan/current-keyboard-layout issues when the active layout
-    is Thai or another non-Latin layout. Falls back to per-key typing if the
-    clipboard path is unavailable.
-    """
+    Avoids VkKeyScan/keyboard-layout issues when the active layout is Thai or
+    another non-Latin layout. Falls back to per-key typing if the clipboard path
+    is unavailable."""
     if not cs2_is_foreground():
         d_print("paste_text skipped — CS2 not foreground")
         return
@@ -496,19 +629,3 @@ def clear_text_field():
     time.sleep(0.02)
     win32api.keybd_event(win32con.VK_DELETE, 0, win32con.KEYEVENTF_KEYUP, 0)
     time.sleep(0.03)
-
-
-def click_image_in_rect(name, template, rect, all_matches=True):
-    """Click one template's matches inside ``rect``; return how many were clicked.
-
-    Used by the invite macro to drive one button per step. ``all_matches`` clicks
-    every hit (e.g. an add button per online friend); otherwise just the first."""
-    matches = scan_matches([(name, template)])
-    if not matches:
-        return 0
-    points = [p for p in matches.get(name, []) if _point_in_rect(p[0], p[1], rect)]
-    if not all_matches:
-        points = points[:1]
-    for cx, cy in points:
-        _click(cx, cy)
-    return len(points)

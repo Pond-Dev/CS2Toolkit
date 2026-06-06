@@ -1,6 +1,8 @@
-"""CS2 Toolkit Overlay — split into modules.
+"""CS2 Toolkit automation package.
 
-Entry point: scripts/overlay.py
+Modules: config (tunables) · core (window/screen/input primitives) ·
+flows (automation behaviors + state machine) · runtime (launch wiring).
+Entry point: overlay.py at the project root.
 """
 
 from .config import VERSION

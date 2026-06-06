@@ -141,32 +141,6 @@ SEARCH_TIMEOUT = 300.0
 SEARCH_WARMUP_DELAY = 120.0
 # =================================================
 
-DEFAULT_OFFSETS = {
-    "client": {
-        "entity_list": "0x24E6590",
-        "game_entity_system_highest_entity_index": "0x2090",
-        "local_player_controller": "0x2345D50",
-        "local_player_pawn": "0x2090880",
-        "game_rules": "0x2381F08",
-    },
-    "controller": {
-        "alive": "0x914",
-        "connected": "0x6EC",
-        "name": "0x6F4",
-        "player_pawn": "0x90C",
-    },
-    "entity": {
-        "health": "0x34C",
-        "life_state": "0x354",
-        "team": "0x3EB",
-    },
-    "game_rules": {
-        "match_started": "0xB0",
-        "warmup": "0x41",
-        "game_phase": "0x84",
-    },
-}
-
 
 # ---- config.json overrides (project root) ----
 # config.py is cs2_overlay/config.py; the root is one level up.
