@@ -90,6 +90,17 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertEqual(headers["Content-Type"], "text/html; charset=utf-8")
         self.assertIn("CS2 Toolkit Dashboard", body.decode("utf-8"))
 
+    def test_dashboard_includes_config_form_targets(self):
+        app = dashboard.DashboardApp(supervisor=FakeSupervisor())
+
+        status, _headers, body = app.dispatch("GET", "/app.js", b"")
+        text = body.decode("utf-8")
+
+        self.assertEqual(status, 200)
+        self.assertIn("/api/config", text)
+        self.assertIn("ALT_FRIEND_CODES", text)
+        self.assertIn("MATCH_THRESHOLD", text)
+
 
 class DashboardEntrypointTests(unittest.TestCase):
     def test_make_handler_keeps_dispatch_app(self):

@@ -309,10 +309,30 @@ STYLE_CSS = (
     "min-height:180px;overflow:auto}"
 )
 
-APP_JS = """async function api(path, options={}) {
+APP_JS = """const CONFIG_FIELDS = [
+  ['AUTO_INVITE', 'checkbox'],
+  ['HOST_MONITOR_INDEX', 'number'],
+  ['GAME_MODE', 'select'],
+  ['ALT_FRIEND_CODES', 'textarea'],
+  ['MATCH_THRESHOLD', 'number'],
+  ['MATCH_SCALES', 'text'],
+  ['STARTUP_DELAY_SECS', 'number'],
+  ['DEBUG', 'checkbox']
+];
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;');
+}
+
+async function api(path, options={}) {
   const res = await fetch(path, {headers:{'Content-Type':'application/json'}, ...options});
   return await res.json();
 }
+
 async function refresh() {
   const state = await api('/api/state');
   document.getElementById('status-pill').textContent = state.running ? 'RUNNING' : 'STOPPED';
@@ -325,15 +345,63 @@ async function refresh() {
   const logs = await api('/api/logs');
   document.getElementById('logs').textContent = logs.lines.join('\\n');
 }
+
 async function send(path, body={}) {
   await api(path, {method:'POST', body:JSON.stringify(body)});
   await refresh();
 }
+
+async function loadConfig() {
+  const data = await api('/api/config');
+  const config = data.config || {};
+  const form = document.getElementById('config-form');
+  form.innerHTML = CONFIG_FIELDS.map(([key, type]) => {
+    const value = config[key];
+    if (type === 'checkbox') {
+      return `<label><span>${key}</span><input data-key="${key}" type="checkbox" ${value ? 'checked' : ''}></label>`;
+    }
+    if (type === 'textarea') {
+      return `<label><span>${key}</span><textarea data-key="${key}">${escapeHtml((value || []).join('\\n'))}</textarea></label>`;
+    }
+    if (type === 'select') {
+      return `<label><span>${key}</span><select data-key="${key}"><option value="competitive">competitive</option><option value="premier">premier</option></select></label>`;
+    }
+    const fieldValue = Array.isArray(value) ? value.join(', ') : value ?? '';
+    return `<label><span>${key}</span><input data-key="${key}" type="${type}" value="${escapeHtml(fieldValue)}"></label>`;
+  }).join('') + '<button type="button" id="save-config">Save Config</button>';
+  const gameMode = form.querySelector('[data-key="GAME_MODE"]');
+  if (gameMode && config.GAME_MODE) {
+    gameMode.value = config.GAME_MODE;
+  }
+  document.getElementById('save-config').onclick = saveConfig;
+}
+
+async function saveConfig() {
+  const payload = {};
+  document.querySelectorAll('[data-key]').forEach(el => {
+    const key = el.dataset.key;
+    if (el.type === 'checkbox') {
+      payload[key] = el.checked;
+    } else if (key === 'ALT_FRIEND_CODES') {
+      payload[key] = el.value.split('\\n').map(x => x.trim()).filter(Boolean);
+    } else if (key === 'MATCH_SCALES') {
+      payload[key] = el.value.split(',').map(x => Number(x.trim())).filter(x => !Number.isNaN(x));
+    } else if (el.type === 'number') {
+      payload[key] = Number(el.value);
+    } else {
+      payload[key] = el.value;
+    }
+  });
+  await send('/api/config', payload);
+  await loadConfig();
+}
+
 document.getElementById('start').onclick = () => send('/api/start', {mode:document.getElementById('mode').value});
 document.getElementById('stop').onclick = () => send('/api/stop');
 document.getElementById('restart').onclick = () => send('/api/restart', {mode:document.getElementById('mode').value});
 setInterval(refresh, 1500);
 refresh();
+loadConfig();
 """
 
 
