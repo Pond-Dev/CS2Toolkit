@@ -91,5 +91,13 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertIn("CS2 Toolkit Dashboard", body.decode("utf-8"))
 
 
+class DashboardEntrypointTests(unittest.TestCase):
+    def test_make_handler_keeps_dispatch_app(self):
+        app = dashboard.DashboardApp(supervisor=FakeSupervisor())
+        handler_cls = dashboard.make_handler(app)
+
+        self.assertEqual(handler_cls.app, app)
+
+
 if __name__ == "__main__":
     unittest.main()

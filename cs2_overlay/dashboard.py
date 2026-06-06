@@ -1,14 +1,17 @@
 """Local web dashboard for supervising CS2 Toolkit."""
 from __future__ import annotations
 
+import argparse
 import os
 import json
 import subprocess
 import sys
 import threading
 from collections import deque
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
+import webbrowser
 
 from . import config as default_config
 from .core import BASE, is_admin, list_cs2_windows
@@ -381,3 +384,55 @@ class DashboardApp:
 
     def _text(self, status, value, content_type):
         return status, {"Content-Type": content_type}, value.encode("utf-8")
+
+
+def make_handler(app):
+    class DashboardHandler(BaseHTTPRequestHandler):
+        app = None
+
+        def do_GET(self):
+            self._serve()
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            self._serve(self.rfile.read(length))
+
+        def log_message(self, format, *args):
+            return
+
+        def _serve(self, body=b""):
+            status, headers, response = self.app.dispatch(self.command, self.path, body)
+            self.send_response(status)
+            for key, value in headers.items():
+                self.send_header(key, value)
+            self.send_header("Content-Length", str(len(response)))
+            self.end_headers()
+            self.wfile.write(response)
+
+    DashboardHandler.app = app
+    return DashboardHandler
+
+
+def run_dashboard(host=DEFAULT_HOST, port=DEFAULT_PORT, open_browser=True):
+    app = DashboardApp()
+    server = ThreadingHTTPServer((host, port), make_handler(app))
+    url = f"http://{host}:{port}"
+    print(f"CS2 Toolkit dashboard: {url}")
+    if open_browser:
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        app.supervisor.stop()
+        server.server_close()
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Run the CS2 Toolkit local dashboard.")
+    parser.add_argument("--host", default=DEFAULT_HOST)
+    parser.add_argument("--port", default=DEFAULT_PORT, type=int)
+    parser.add_argument("--no-browser", action="store_true")
+    args = parser.parse_args(argv)
+    run_dashboard(args.host, args.port, open_browser=not args.no_browser)
