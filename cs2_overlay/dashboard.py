@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import sys
 import threading
 from collections import deque
 from pathlib import Path
 
+from . import config as default_config
 from .core import BASE, is_admin, list_cs2_windows
 
 OVERLAY_SCRIPT = Path(BASE) / "overlay.py"
@@ -146,3 +148,105 @@ class DashboardSupervisor:
         thread = threading.Thread(target=target, args=args, daemon=True)
         thread.start()
         return thread
+
+
+EDITABLE_CONFIG_KEYS = {
+    "AUTO_INVITE",
+    "HOST_MONITOR_INDEX",
+    "GAME_MODE",
+    "ALT_FRIEND_CODES",
+    "MATCH_THRESHOLD",
+    "MATCH_SCALES",
+    "STARTUP_DELAY_SECS",
+    "DEBUG",
+}
+
+
+def _require_bool(key, value):
+    if not isinstance(value, bool):
+        raise ValueError(f"{key} must be a boolean")
+    return value
+
+
+def _require_non_negative_number(key, value):
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"{key} must be a non-negative number")
+    return value
+
+
+def validate_config_payload(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("config payload must be an object")
+    validated = {}
+    for key, value in payload.items():
+        if key not in EDITABLE_CONFIG_KEYS:
+            raise ValueError(f"unknown config key: {key}")
+        if key in {"AUTO_INVITE", "DEBUG"}:
+            validated[key] = _require_bool(key, value)
+        elif key == "HOST_MONITOR_INDEX":
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError("HOST_MONITOR_INDEX must be an integer >= 0")
+            validated[key] = value
+        elif key == "GAME_MODE":
+            if value not in {"competitive", "premier"}:
+                raise ValueError("GAME_MODE must be competitive or premier")
+            validated[key] = value
+        elif key == "ALT_FRIEND_CODES":
+            if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+                raise ValueError("ALT_FRIEND_CODES must be an array of strings")
+            validated[key] = value
+        elif key == "MATCH_THRESHOLD":
+            if (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not 0 <= value <= 1
+            ):
+                raise ValueError("MATCH_THRESHOLD must be a number between 0 and 1")
+            validated[key] = value
+        elif key == "MATCH_SCALES":
+            if (
+                not isinstance(value, list)
+                or not value
+                or not all(
+                    isinstance(item, (int, float)) and not isinstance(item, bool) and item > 0
+                    for item in value
+                )
+            ):
+                raise ValueError("MATCH_SCALES must be a non-empty array of positive numbers")
+            validated[key] = value
+        elif key == "STARTUP_DELAY_SECS":
+            validated[key] = _require_non_negative_number(key, value)
+    return validated
+
+
+def read_dashboard_config(path=CONFIG_JSON):
+    path = Path(path)
+    if not path.is_file():
+        return {}
+    with path.open(encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError("config.json must contain an object")
+    return data
+
+
+def editable_dashboard_config(path=CONFIG_JSON):
+    values = {key: getattr(default_config, key) for key in EDITABLE_CONFIG_KEYS}
+    path = Path(path)
+    if path.is_file():
+        values.update(
+            {key: value for key, value in read_dashboard_config(path).items() if key in EDITABLE_CONFIG_KEYS}
+        )
+    for key, value in list(values.items()):
+        if isinstance(value, tuple):
+            values[key] = list(value)
+    return values
+
+
+def write_dashboard_config(payload, path=CONFIG_JSON):
+    path = Path(path)
+    existing = read_dashboard_config(path) if path.is_file() else {}
+    validated = validate_config_payload(payload)
+    existing.update(validated)
+    path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
+    return {"ok": True, "config": existing}
