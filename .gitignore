@@ -13,6 +13,7 @@ output/
 dist/
 build/
 
+docs/
 CLAUDE.md
 tests
 cs2-dumper.log
