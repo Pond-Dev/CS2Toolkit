@@ -8,6 +8,7 @@ import sys
 import threading
 from collections import deque
 from pathlib import Path
+from urllib.parse import urlparse
 
 from . import config as default_config
 from .core import BASE, is_admin, list_cs2_windows
@@ -250,3 +251,133 @@ def write_dashboard_config(payload, path=CONFIG_JSON):
     existing.update(validated)
     path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
     return {"ok": True, "config": existing}
+
+
+INDEX_HTML = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CS2 Toolkit Dashboard</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <strong>CS2 Toolkit Dashboard</strong>
+    <span id="status-pill">Loading</span>
+  </header>
+  <main>
+    <aside>
+      <button id="start" type="button">Start</button>
+      <button id="restart" type="button">Restart</button>
+      <button id="stop" type="button">Stop</button>
+      <select id="mode">
+        <option value="auto_derank">Auto Derank</option>
+        <option value="derank_afk">Derank AFK</option>
+        <option value="afk_reconnect">AFK Reconnect</option>
+      </select>
+    </aside>
+    <section>
+      <div id="cards"></div>
+      <form id="config-form"></form>
+      <pre id="logs"></pre>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
+"""
+
+STYLE_CSS = (
+    "body{font-family:Segoe UI,Arial,sans-serif;margin:0;background:#f4f6f8;color:#17202c}"
+    "header{height:56px;background:#101720;color:#edf4fa;display:flex;align-items:center;"
+    "justify-content:space-between;padding:0 18px}"
+    "main{display:grid;grid-template-columns:260px 1fr;gap:16px;padding:16px}"
+    "aside,section{background:white;border:1px solid #dde4eb;border-radius:8px;padding:14px}"
+    "button,select,input,textarea{font:inherit}"
+    "button{width:100%;margin:0 0 8px;padding:9px;border:0;border-radius:7px;"
+    "background:#334155;color:white}"
+    "#start{background:#16a34a}"
+    "#stop{background:#fff1f2;color:#be123c;border:1px solid #fecdd3}"
+    "#cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}"
+    ".card{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px}"
+    "label{display:grid;gap:4px;margin-bottom:8px}"
+    "pre{background:#0b1118;color:#d8e3ec;border-radius:8px;padding:12px;"
+    "min-height:180px;overflow:auto}"
+)
+
+APP_JS = """async function api(path, options={}) {
+  const res = await fetch(path, {headers:{'Content-Type':'application/json'}, ...options});
+  return await res.json();
+}
+async function refresh() {
+  const state = await api('/api/state');
+  document.getElementById('status-pill').textContent = state.running ? 'RUNNING' : 'STOPPED';
+  document.getElementById('cards').innerHTML = [
+    ['Admin', state.admin ? 'Yes' : 'No'],
+    ['PID', state.pid || '-'],
+    ['Mode', state.mode],
+    ['CS2 windows', state.cs2WindowCount ?? '-']
+  ].map(([k,v]) => `<div class="card"><small>${k}</small><br><strong>${v}</strong></div>`).join('');
+  const logs = await api('/api/logs');
+  document.getElementById('logs').textContent = logs.lines.join('\\n');
+}
+async function send(path, body={}) {
+  await api(path, {method:'POST', body:JSON.stringify(body)});
+  await refresh();
+}
+document.getElementById('start').onclick = () => send('/api/start', {mode:document.getElementById('mode').value});
+document.getElementById('stop').onclick = () => send('/api/stop');
+document.getElementById('restart').onclick = () => send('/api/restart', {mode:document.getElementById('mode').value});
+setInterval(refresh, 1500);
+refresh();
+"""
+
+
+class DashboardApp:
+    def __init__(self, supervisor=None):
+        self.supervisor = supervisor or DashboardSupervisor()
+
+    def dispatch(self, method, path, body):
+        route = urlparse(path).path
+        try:
+            if method == "GET" and route == "/":
+                return self._text(200, INDEX_HTML, "text/html; charset=utf-8")
+            if method == "GET" and route == "/style.css":
+                return self._text(200, STYLE_CSS, "text/css; charset=utf-8")
+            if method == "GET" and route == "/app.js":
+                return self._text(200, APP_JS, "application/javascript; charset=utf-8")
+            if method == "GET" and route == "/api/state":
+                return self._json(200, self.supervisor.state())
+            if method == "GET" and route == "/api/logs":
+                return self._json(200, {"lines": self.supervisor.logs.lines()})
+            if method == "GET" and route == "/api/config":
+                return self._json(200, {"config": editable_dashboard_config()})
+            if method == "POST" and route == "/api/start":
+                payload = self._payload(body)
+                return self._result(self.supervisor.start(payload.get("mode", "auto_derank")))
+            if method == "POST" and route == "/api/stop":
+                return self._result(self.supervisor.stop())
+            if method == "POST" and route == "/api/restart":
+                payload = self._payload(body)
+                return self._result(self.supervisor.restart(payload.get("mode")))
+            if method == "POST" and route == "/api/config":
+                return self._json(200, write_dashboard_config(self._payload(body)))
+            return self._json(404, {"ok": False, "error": "not found"})
+        except (json.JSONDecodeError, ValueError) as exc:
+            return self._json(400, {"ok": False, "error": str(exc)})
+
+    def _payload(self, body):
+        if not body:
+            return {}
+        return json.loads(body.decode("utf-8"))
+
+    def _json(self, status, value):
+        return status, {"Content-Type": "application/json"}, json.dumps(value).encode("utf-8")
+
+    def _result(self, value):
+        status = 200 if value.get("ok") else 409
+        return self._json(status, value)
+
+    def _text(self, status, value, content_type):
+        return status, {"Content-Type": content_type}, value.encode("utf-8")
