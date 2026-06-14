@@ -61,25 +61,6 @@ an already-elevated terminal.
 > CS2 must be the focused (foreground) window — the tool won't send input while you're
 > alt-tabbed to another app.
 
-### Dashboard
-
-To use the local browser dashboard instead of the console-only launcher, run from an
-elevated terminal:
-
-```powershell
-python dashboard.py
-```
-
-The dashboard opens on `http://127.0.0.1:8765` by default. It can start, stop, and
-restart the automation subprocess, choose the runtime mode, edit common `config.json`
-settings, and show recent logs.
-
-Use `--no-browser` if you only want to start the server:
-
-```powershell
-python dashboard.py --no-browser
-```
-
 ---
 
 ## Configuration
@@ -96,7 +77,7 @@ These do not require CS2 to be running:
 
 ```powershell
 python -m unittest discover -s tests
-python -m compileall -q launcher.py overlay.py dashboard.py cs2_overlay tests
+python -m compileall -q launcher.py overlay.py cs2_overlay tests
 ```
 
 ---
@@ -107,7 +88,6 @@ python -m compileall -q launcher.py overlay.py dashboard.py cs2_overlay tests
 |---|---|
 | `run.bat` | Launcher — auto-elevates, asks for a mode, starts `launcher.py` |
 | `launcher.py` | CLI supervisor — runs and restarts the automation process |
-| `dashboard.py` | Local browser dashboard for process control, config editing, and logs |
 | `overlay.py` | Automation entry point (historical name; draws no overlay) |
 | `cs2_overlay/` | The package: `config`, `core`, `flows`, `runtime` |
 | `pic/*.png` | Button images the clicker looks for |

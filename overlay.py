@@ -1,7 +1,5 @@
 """CS2 Toolkit — entry point."""
 import os
-import threading
-import time
 
 from cs2_overlay.config import DERANK_AFK_MODE, STARTUP_DELAY_SECS, VERSION
 from cs2_overlay.core import BASE, disable_console_quick_edit, is_admin, log
@@ -20,10 +18,12 @@ def main():
     wait_for_automation_mode(DERANK_AFK_MODE, STARTUP_DELAY_SECS)
 
     automation_loop, automation_name = automation_for_mode(DERANK_AFK_MODE)
-    threading.Thread(target=automation_loop, daemon=True, name=automation_name).start()
-
-    while True:
-        time.sleep(1)
+    # Run the automation on the MAIN thread (not a daemon thread): if it ever
+    # raises out, the process exits non-zero so the launcher/run.bat supervisor
+    # can restart it. A daemon thread that died would leave this process alive
+    # but idle, and the supervisor would never restart it.
+    log(f"[*] Automation start: {automation_name}")
+    automation_loop()
 
 
 if __name__ == "__main__":

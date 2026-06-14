@@ -33,7 +33,7 @@ BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PIC_DIR = os.path.join(BASE, "pic")
 
 # ---- shared mutable state -------------------------------------------------
-_cs2_hwnd_cache = {"hwnd": 0, "checked": 0.0}
+_cs2_windows_cache = {"windows": [], "checked": 0.0}
 
 
 # ---- logging / process helpers --------------------------------------------
@@ -76,20 +76,6 @@ def disable_console_quick_edit(kernel32=None):
 
 
 # ---- CS2 window discovery -------------------------------------------------
-def get_cs2_hwnd():
-    """Return CS2's HWND (or 0). Cached for 1s — FindWindow isn't expensive but
-    doing it on every poll burns a syscall."""
-    now = time.monotonic()
-    cache = _cs2_hwnd_cache
-    if now - cache["checked"] < 1.0 and cache["hwnd"]:
-        if win32gui.IsWindow(cache["hwnd"]):
-            return cache["hwnd"]
-    hwnd = win32gui.FindWindow(None, WIN)
-    cache["hwnd"] = hwnd
-    cache["checked"] = now
-    return hwnd
-
-
 def window_client_rect(hwnd):
     """Client rect for a specific CS2 window as (left, top, right, bottom)."""
     try:
@@ -123,18 +109,7 @@ def any_cs2_window():
 
     The multi-instance clicker gates on "a CS2 is open" rather than "CS2 is
     focused" since only one of several windows can ever be foreground."""
-    found = []
-
-    def _cb(hwnd, _):
-        if win32gui.IsWindowVisible(hwnd) and win32gui.GetWindowText(hwnd) == WIN:
-            found.append(hwnd)
-        return True
-
-    try:
-        win32gui.EnumWindows(_cb, None)
-    except Exception:
-        return False
-    return bool(found)
+    return bool(list_cs2_windows())
 
 
 def window_monitor_rect(hwnd):
@@ -158,7 +133,13 @@ def list_cs2_windows():
     """Every visible CS2 top-level window, ordered by on-screen position.
 
     Top row windows come first, left-to-right; lower rows follow. This makes
-    HOST_MONITOR_INDEX=0 target the upper-left CS2 window in tiled layouts."""
+    HOST_MONITOR_INDEX=0 target the upper-left CS2 window in tiled layouts.
+    Result is cached for 0.5s — EnumWindows is cheap but calling it 3+ times
+    per tick adds up when the window list barely changes between polls."""
+    now = time.monotonic()
+    cache = _cs2_windows_cache
+    if now - cache["checked"] < 0.5:
+        return list(cache["windows"])  # copy: callers must not mutate the cache
     found = []
 
     def _cb(hwnd, _):
@@ -169,17 +150,13 @@ def list_cs2_windows():
     try:
         win32gui.EnumWindows(_cb, None)
     except Exception:
+        cache["windows"] = []
+        cache["checked"] = now
         return []
-    return sorted(found, key=_window_position_key)
-
-
-def window_pid(hwnd):
-    """The process id owning a window (0 on failure)."""
-    try:
-        _tid, pid = win32process.GetWindowThreadProcessId(hwnd)
-        return pid
-    except Exception:
-        return 0
+    result = sorted(found, key=_window_position_key)
+    cache["windows"] = result
+    cache["checked"] = now
+    return list(result)  # copy: callers must not mutate the cache
 
 
 def _tap_alt():
@@ -252,7 +229,7 @@ def send_disconnect():
         return
     win32api.keybd_event(DISCONNECT_KEY_VK, 0, 0, 0)
     time.sleep(0.05)
-    win32api.keybd_event(DISCONNECT_KEY_VK, 0, 2, 0)
+    win32api.keybd_event(DISCONNECT_KEY_VK, 0, win32con.KEYEVENTF_KEYUP, 0)
 
 
 def _click(x, y):
@@ -457,7 +434,7 @@ def _blocked_in_rect(name, matches, rect):
     )
 
 
-def find_and_click_in_rect(templates, rect, skip_click=()):
+def find_and_click_in_rect(templates, rect, skip_click=(), matches=None):
     """Click matching buttons whose center falls inside ``rect`` (one monitor).
 
     Every click is scoped to a single monitor so each instance is serviced one
@@ -465,9 +442,12 @@ def find_and_click_in_rect(templates, rect, skip_click=()):
     click correct.png while reconnect.png shows on it) — so pass the blocker
     image in ``templates`` even if it's in ``skip_click``. Names in
     ``skip_click`` are scanned (for suppression) but never clicked.
+    Pass ``matches`` to reuse a result from a previous ``scan_matches`` call and
+    skip the redundant screenshot.
     Returns the list of clicked template names."""
     skip = {n.lower() for n in skip_click}
-    matches = scan_matches(templates)
+    if matches is None:
+        matches = scan_matches(templates)
     if not matches:
         return []
     clicked = []

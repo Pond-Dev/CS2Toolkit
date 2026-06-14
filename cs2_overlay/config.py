@@ -1,4 +1,4 @@
-"""Tunables, Win32 constants, and default memory offsets.
+"""Tunables and Win32 constants.
 
 The values below are *defaults*. To change settings without touching code, edit
 ``config.json`` at the project root — any key matching a name here overrides it
@@ -102,8 +102,8 @@ INVITE_STEP_WAIT = 0.8
 # never overlap:
 #   INVITE -> host invites alts; alts accept the popup (ACCEPT_INVITE_IMAGE)
 #   GO     -> host clicks GO_IMAGE to start matchmaking
-#   SEARCH -> a match is found (READY_ACCEPT_IMAGE) -> accept on every monitor
-#   WAIT   -> wait until the game starts (memory says in-game)
+#   SEARCH -> accept the ready-check (READY_ACCEPT_IMAGE) on every monitor, then
+#             wait until warmup.png is detected (the game has started)
 #   DERANK -> disconnect<->reconnect each instance until the match ends, then loop
 #
 # Master on/off for the auto-invite flow:
@@ -150,27 +150,59 @@ CONFIG_JSON = os.path.join(
 )
 
 
+def _coerce_override(key, default, value):
+    """Validate (and lightly coerce) a config.json value against the default's
+    type, so a mistyped setting fails loudly here instead of deep inside cv2/win32
+    later. Returns (ok, coerced_value). ``None`` always passes — several settings
+    document null to disable them (e.g. INVITE_RESULT_ROW_POS)."""
+    if value is None:
+        return True, None
+    # bool must come before int/float: bool is a subclass of int.
+    if isinstance(default, bool):
+        if not isinstance(value, bool):
+            print(f"[WARN] config.json: {key} must be true/false — ignored")
+            return False, None
+    elif isinstance(default, tuple):
+        if not isinstance(value, list):
+            print(f"[WARN] config.json: {key} must be a list — ignored")
+            return False, None
+        value = tuple(value)  # JSON has only lists; keep tuple-typed settings tuples
+    elif isinstance(default, (int, float)):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            print(f"[WARN] config.json: {key} must be a number — ignored")
+            return False, None
+    elif isinstance(default, str):
+        if not isinstance(value, str):
+            print(f"[WARN] config.json: {key} must be a string — ignored")
+            return False, None
+    return True, value
+
+
 def _apply_json_overrides():
     """Override any constant above with a matching key in config.json (optional).
-    JSON lists replace tuple-typed settings; unknown keys are warned and ignored.
-    A missing or invalid file leaves the defaults untouched."""
+    JSON lists replace tuple-typed settings; unknown or mistyped keys are warned
+    and ignored. A missing or invalid file leaves the defaults untouched.
+    Returns the list of keys actually applied."""
     if not os.path.isfile(CONFIG_JSON):
-        return
+        return []
     try:
         with open(CONFIG_JSON, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError) as e:
         print(f"[WARN] config.json ignored (invalid): {e}")
-        return
+        return []
     g = globals()
+    applied = []
     for key, value in data.items():
         if key not in g:
             print(f"[WARN] config.json: unknown setting {key!r} ignored")
             continue
-        # Keep tuple-typed settings as tuples (JSON has only lists).
-        if isinstance(g[key], tuple) and isinstance(value, list):
-            value = tuple(value)
-        g[key] = value
+        ok, coerced = _coerce_override(key, g[key], value)
+        if not ok:
+            continue
+        g[key] = coerced
+        applied.append(key)
+    return applied
 
 
 def _env_bool(name):
@@ -190,9 +222,10 @@ def _apply_env_overrides():
         globals()["AUTO_RECONNECT"] = reconnect
 
 
-_apply_json_overrides()
+_json_overridden = _apply_json_overrides()
 _apply_env_overrides()
 
-# Recompute GO_PRE_IMAGES from GAME_MODE after overrides (unless overridden directly).
-if GAME_MODE in _GAME_MODE_PRE_IMAGES:
+# Recompute GO_PRE_IMAGES from GAME_MODE after overrides — but only when
+# config.json didn't set GO_PRE_IMAGES directly, so an explicit override wins.
+if "GO_PRE_IMAGES" not in _json_overridden and GAME_MODE in _GAME_MODE_PRE_IMAGES:
     GO_PRE_IMAGES = _GAME_MODE_PRE_IMAGES[GAME_MODE]

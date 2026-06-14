@@ -3,7 +3,7 @@
 Supervises ``overlay.py``: starts it, lets its logs stream straight to
 this console, and restarts it (with back-off) if it exits. Press Ctrl+C to stop.
 
-Run as Administrator so the overlay can read CS2 memory:
+Run as Administrator so the overlay can send synthetic keyboard/mouse input:
 
     py -3 launcher.py
 """
@@ -80,7 +80,7 @@ def main():
     print(f"CS2 Toolkit v{VERSION}")
     print(f"Base: {BASE_DIR}")
     if not is_admin():
-        print("[WARN] Not running as Administrator — CS2 memory reads will fail.")
+        print("[WARN] Not running as Administrator — synthetic keyboard/mouse input will fail.")
     print("Overlay starting. Press Ctrl+C to stop.\n")
     supervise()
     print("\n[*] Stopped.")

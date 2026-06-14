@@ -6,7 +6,7 @@ from .flows import afk_loop, controller_loop
 
 
 def wait_before_automation(delay, sleep=time.sleep, log_func=log):
-    """Pause before starting automation threads."""
+    """Pause before starting automation."""
     if delay <= 0:
         return
     log_func(f"[*] Startup delay: waiting {delay:g}s before automation")

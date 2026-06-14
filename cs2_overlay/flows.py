@@ -86,7 +86,7 @@ def click_image_on(name, img, windows, action_label=None):
             continue
         focus_window(hwnd)
         time.sleep(FOCUS_DELAY)
-        clicked = len(find_and_click_in_rect([(name, img)], rect))
+        clicked = len(find_and_click_in_rect([(name, img)], rect, matches=matches))
         if clicked and action_label:
             log(f"[+] {action_label}: {name} clicked window {hwnd} count={clicked}")
         total += clicked
@@ -127,7 +127,7 @@ def accept_invite(by_name, suppress_reconnect=True):
             continue
         focus_window(hwnd)
         time.sleep(FOCUS_DELAY)
-        clicked = len(find_and_click_in_rect([(name, img)], rect))
+        clicked = len(find_and_click_in_rect([(name, img)], rect, matches=matches))
         if clicked:
             log(f"[+] Auto accept: {name} clicked window {hwnd} count={clicked}")
         total += clicked
@@ -479,6 +479,10 @@ def _state_search_and_start(by_name):
 
 
 def controller_loop():
+    # Runs on the MAIN thread (see overlay.py): if anything in here raises, the
+    # process exits and the launcher/run.bat supervisor restarts it with back-off.
+    # That is the recovery path — we deliberately do NOT swallow errors here, so a
+    # real failure surfaces in the console instead of spinning silently.
     by_name = dict(load_templates())
     log("[*] Controller: derank state machine started")
     while True:
