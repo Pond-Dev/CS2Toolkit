@@ -44,6 +44,21 @@ Each `pic/*.png` must match the button as it looks on *your* screen (matching is
 At minimum `reconnect.png` must match. If your resolution or UI differs, crop a fresh
 screenshot of the button and replace the image.
 
+### 5. Install the Game State Integration config (required)
+
+Both derank modes decide the match has started by reading CS2's real game state
+(Game State Integration), not by matching a `warmup.png` on screen. Copy the tracked
+config into CS2's config folder, then **restart CS2**:
+
+```
+gamestate_integration_cs2toolkit.cfg
+  ->  ...\steamapps\common\Counter-Strike Global Offensive\game\csgo\cfg\
+```
+
+Its `uri`/`token` must match `GSI_HOST`/`GSI_PORT`/`GSI_TOKEN` (defaults
+`127.0.0.1:3000`, token `cs2toolkit`). Run `python -u gsi_probe.py` to confirm CS2
+is posting state before relying on it.
+
 ---
 
 ## Running
@@ -55,7 +70,7 @@ an already-elevated terminal.
 | Mode | What it does |
 |---|---|
 | **1. Auto Derank** | Full loop: invite the alts in `config.json` → queue → accept → derank → repeat |
-| **2. Derank AFK** | Accept popups, and disconnect whenever warmup is detected |
+| **2. Derank AFK** | Accept popups, and disconnect when GSI reports the match has gone live |
 | **3. AFK Reconnect** | Accept popups, and click reconnect on the host |
 
 > CS2 must be the focused (foreground) window — the tool won't send input while you're
@@ -89,8 +104,10 @@ python -m compileall -q launcher.py overlay.py cs2_overlay tests
 | `run.bat` | Launcher — auto-elevates, asks for a mode, starts `launcher.py` |
 | `launcher.py` | CLI supervisor — runs and restarts the automation process |
 | `overlay.py` | Automation entry point (historical name; draws no overlay) |
-| `cs2_overlay/` | The package: `config`, `core`, `flows`, `runtime` |
+| `cs2_overlay/` | The package: `config`, `core`, `flows`, `gsi`, `runtime` |
 | `pic/*.png` | Button images the clicker looks for |
+| `gamestate_integration_cs2toolkit.cfg` | GSI provider config — copy into CS2's `cfg/` folder (required) |
+| `gsi_probe.py` | Standalone tool to watch CS2's GSI phase stream and verify the setup |
 | `config.json` | Your settings (overrides the defaults in `cs2_overlay/config.py`) |
 
 ---

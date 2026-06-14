@@ -9,8 +9,8 @@ focus. The pieces:
 - derank cycle       — disconnect <-> reconnect the host until the match ends
 - controller         — the coordinated state machine: INVITE -> GO -> SEARCH ->
                        DERANK -> repeat (the normal mode)
-- afk loop           — the alternate "derank AFK" mode: accept + disconnect on
-                       warmup, or accept + reconnect
+- afk loop           — the alternate "derank AFK" mode: accept + disconnect when
+                       GSI reports the match live, or accept + reconnect
 
 See controller_loop / afk_loop for the two top-level entry points.
 """
@@ -44,7 +44,6 @@ from .config import (
     READY_ACCEPT_IMAGE,
     RECONNECT_WAIT_SECS,
     SEARCH_TIMEOUT,
-    SEARCH_WARMUP_DELAY,
     STATE_POLL,
 )
 from .core import (
@@ -68,8 +67,19 @@ from .core import (
     window_is_foreground,
     window_monitor_rect,
 )
+from .config import GSI_HOST, GSI_PORT, GSI_TOKEN, GSI_TRIGGER_PHASE
+from .gsi import GsiListener
 
 RECONNECT_IMAGE = "reconnect.png"
+
+
+def start_gsi():
+    """Start the one GSI listener that both derank loops read from (the single
+    'reader'; every CS2 window is just an actuator the loop disconnects)."""
+    return GsiListener(
+        host=GSI_HOST, port=GSI_PORT, token=GSI_TOKEN,
+        trigger_phase=GSI_TRIGGER_PHASE, log_func=log,
+    ).start()
 
 
 # ===== always-on per-monitor accepts =======================================
@@ -443,15 +453,6 @@ def _state_go(host, by_name):
     return False
 
 
-def _any_warmup(by_name):
-    """True when warmup.png is visible on any CS2 window."""
-    warmup_tmpl = [(n, img) for n, img in by_name.items() if n.startswith("warmup")]
-    if not warmup_tmpl:
-        return False
-    matches = scan_matches(warmup_tmpl)
-    return any(any_match_in(matches, window_monitor_rect(w)) for w in list_cs2_windows())
-
-
 def _disconnect_all(windows):
     """Press Z on every CS2 window."""
     for hwnd in windows:
@@ -461,15 +462,15 @@ def _disconnect_all(windows):
             log(f"[+] Search: disconnect pressed window {hwnd}")
 
 
-def _state_search_and_start(by_name):
-    """Click accept on all windows; after SEARCH_WARMUP_DELAY check for warmup."""
+def _state_search_and_start(by_name, gsi):
+    """Click accept on all windows until GSI reports the match has gone live,
+    then disconnect every window."""
     log("[*] State: SEARCH")
-    start = time.monotonic()
-    deadline = start + SEARCH_TIMEOUT
+    deadline = time.monotonic() + SEARCH_TIMEOUT
     while time.monotonic() < deadline:
         auto_clicks(by_name)
-        if time.monotonic() - start >= SEARCH_WARMUP_DELAY and _any_warmup(by_name):
-            log("[+] State: warmup detected — waiting 3s then disconnecting all")
+        if gsi.triggered():
+            log("[+] State: match live (gsi) — waiting 3s then disconnecting all")
             time.sleep(3)
             _disconnect_all(list_cs2_windows())
             return True
@@ -484,6 +485,7 @@ def controller_loop():
     # That is the recovery path — we deliberately do NOT swallow errors here, so a
     # real failure surfaces in the console instead of spinning silently.
     by_name = dict(load_templates())
+    gsi = start_gsi()
     log("[*] Controller: derank state machine started")
     while True:
         if not any_cs2_window():
@@ -512,7 +514,7 @@ def controller_loop():
         # Already in queue — skip INVITE+GO, wait for game to start.
         if _is_searching(host, by_name):
             log("[*] State: already searching — skipping to SEARCH")
-            if not _state_search_and_start(by_name):
+            if not _state_search_and_start(by_name, gsi):
                 continue
             log("[*] State: DERANK")
             run_cycle()
@@ -524,7 +526,7 @@ def controller_loop():
             log("[+] State: lobby already ready — skipping INVITE")
             if not _state_go(host, by_name):
                 continue
-            if not _state_search_and_start(by_name):
+            if not _state_search_and_start(by_name, gsi):
                 continue
             log("[*] State: DERANK")
             run_cycle()
@@ -544,8 +546,7 @@ def controller_loop():
 
 
 # ===== derank AFK mode (alternate top-level loop) ==========================
-WARMUP_IMAGE_PREFIX = "warmup"
-WARMUP_DISCONNECT_FOCUS_DELAY = 0.05
+DISCONNECT_FOCUS_DELAY = 0.05  # short focus settle before pressing Z on each window
 
 _last_window_state: dict = {}  # hwnd -> label str
 
@@ -575,41 +576,33 @@ def _press_disconnect_on_windows(
     return count
 
 
-def disconnect_warmup_windows(
+def disconnect_on_live(
     windows,
-    by_name=None,
+    is_live,
     focus_func=focus_window,
     is_foreground_func=window_is_foreground,
     press_disconnect=send_disconnect,
     sleep=time.sleep,
     log_func=log,
 ):
-    """Disconnect CS2 windows that show the warmup image."""
+    """Disconnect every CS2 window when GSI reports the match has gone live.
+
+    Takes ``is_live`` from the GSI listener (any tracked client at the trigger
+    phase) instead of scanning warmup.png, so the trigger comes from the game's
+    real state and is unaffected by window size / display scaling."""
     # Prune closed windows so stale hwnd entries don't suppress log lines.
     active = set(windows)
     for stale in [h for h in list(_last_window_state) if h not in active]:
         del _last_window_state[stale]
 
-    warmup_templates = [
-        (name, img) for name, img in (by_name or {}).items()
-        if name.startswith(WARMUP_IMAGE_PREFIX)
-    ]
-    if not warmup_templates:
-        return 0
-
-    matches = scan_matches(warmup_templates)
-
-    # Check all windows — if any shows warmup, disconnect every window.
-    any_in_warmup = any(any_match_in(matches, window_monitor_rect(hwnd)) for hwnd in windows)
-    label = "WARMUP" if any_in_warmup else "LOBBY"
-
+    label = "LIVE" if is_live else "NOT-LIVE"
     for hwnd in windows:
         prev = _last_window_state.get(hwnd)
         if prev != label:
             _last_window_state[hwnd] = label
             log_func(f"[*] DERANK AFK: hwnd={hwnd} -> {label}")
 
-    if not any_in_warmup:
+    if not is_live:
         return 0
 
     return _press_disconnect_on_windows(
@@ -619,25 +612,29 @@ def disconnect_warmup_windows(
         press_disconnect=press_disconnect,
         sleep=sleep,
         log_func=log_func,
-        reason="warmup (image)",
-        focus_delay=WARMUP_DISCONNECT_FOCUS_DELAY,
+        reason="live (gsi)",
+        focus_delay=DISCONNECT_FOCUS_DELAY,
     )
 
 
-def afk_tick(by_name):
-    """One AFK pass: accept popups, reconnect if enabled, disconnect on warmup."""
+def afk_tick(by_name, gsi):
+    """One AFK pass: accept popups, then either reconnect (AUTO_RECONNECT) or
+    disconnect every window once GSI reports the match has gone live."""
     if AUTO_RECONNECT:
         auto_clicks(by_name)  # suppress_reconnect=True: don't confirm reconnect dialogs on alt monitors
         accept_reconnect(by_name)
         return 0
     auto_clicks(by_name, suppress_reconnect=False)
-    return disconnect_warmup_windows(list_cs2_windows(), by_name)
+    return disconnect_on_live(list_cs2_windows(), gsi.triggered())
 
 
 def afk_loop():
     by_name = dict(load_templates())
+    # AFK Reconnect mode never disconnects on live, so it needs no GSI listener
+    # (and shouldn't bind the port). Only the disconnect path starts one.
+    gsi = None if AUTO_RECONNECT else start_gsi()
     log("[*] DERANK AFK: auto accept + disconnect mode started")
     log(f"[*] Templates loaded ({len(by_name)}): {', '.join(sorted(by_name)) or 'NONE'}")
     while True:
-        afk_tick(by_name)
+        afk_tick(by_name, gsi)
         time.sleep(STATE_POLL)

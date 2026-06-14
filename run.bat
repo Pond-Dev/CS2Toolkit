@@ -12,7 +12,7 @@ echo.
 echo  CS2 Toolkit
 echo  ===========
 echo  1. Auto Derank   (invite + queue + derank)
-echo  2. Derank AFK    (accept + disconnect on warmup)
+echo  2. Derank AFK    (accept + disconnect when match goes live)
 echo  3. AFK Reconnect (accept + reconnect)
 echo.
 set /p MODE="Select mode (1/2/3): "

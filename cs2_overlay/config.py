@@ -17,6 +17,20 @@ AUTO_RECONNECT = False   # AFK reconnect mode: click reconnect.png automatically
 DISCONNECT_KEY_VK = 0x5A      # Z
 WIN = "Counter-Strike 2"
 
+# ---- Game State Integration (GSI) ----
+# Both derank modes trigger the disconnect on CS2's real game state (read via
+# GSI) instead of matching warmup.png on screen: a listener receives the game's
+# GSI POSTs and reports the match as ready when map.phase becomes
+# GSI_TRIGGER_PHASE ("live" = the match has committed). This is resolution-proof
+# (no template to mis-scale). REQUIRED: install gamestate_integration_*.cfg in
+# CS2's cfg folder with a matching uri/token (see gsi_probe.py to validate).
+# Multi-instance is fine — every client POSTs to one endpoint and any client
+# reaching the trigger phase disconnects all windows (the party is in one match).
+GSI_HOST = "127.0.0.1"
+GSI_PORT = 3000
+GSI_TOKEN = "cs2toolkit"   # must match the "token" in the .cfg; None to skip the check
+GSI_TRIGGER_PHASE = "live"  # disconnect when map.phase reaches this
+
 # Image scanner: scan pic/ this often; pause after each click so the same
 # button isn't spam-clicked while the UI transitions.
 SCAN_INTERVAL = 0.5
@@ -103,7 +117,7 @@ INVITE_STEP_WAIT = 0.8
 #   INVITE -> host invites alts; alts accept the popup (ACCEPT_INVITE_IMAGE)
 #   GO     -> host clicks GO_IMAGE to start matchmaking
 #   SEARCH -> accept the ready-check (READY_ACCEPT_IMAGE) on every monitor, then
-#             wait until warmup.png is detected (the game has started)
+#             wait until GSI reports the match live (the game has started)
 #   DERANK -> disconnect<->reconnect each instance until the match ends, then loop
 #
 # Master on/off for the auto-invite flow:
@@ -137,8 +151,6 @@ INVITE_ACCEPT_SECS = 45.0
 GO_TIMEOUT = 30.0
 # Give up waiting for the match to be found / start, and restart, after this long.
 SEARCH_TIMEOUT = 300.0
-# Seconds of auto-accept before warmup detection activates.
-SEARCH_WARMUP_DELAY = 120.0
 # =================================================
 
 
